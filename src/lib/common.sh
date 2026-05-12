@@ -12,6 +12,7 @@ log_message() {
     local message="$2"
     local timestamp
     timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+    mkdir -p "$(dirname "${LOG_FILE}")" 2>/dev/null || true
     echo "[${timestamp}] [${level}] ${message}" >> "${LOG_FILE}"
 }
 

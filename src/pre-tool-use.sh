@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # pre-tool-use.sh -- PreToolUse hook for copilot-cli-hook
-# Phase 1: Modify protocol experiment -- rewrites echo commands
+# Phase 2: Copilot CLI optimization for safe commands
 # source: https://github.com/whitebob/claude-hook-copilot
 set -euo pipefail
 
 HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${HOOK_DIR}/lib/common.sh"
+source "${HOOK_DIR}/lib/copilot.sh"
 
 # Read stdin (hook input JSON)
 INPUT=$(cat)
@@ -20,20 +21,35 @@ DESCRIPTION=$(get_field "$INPUT" "description")
 
 log_message "INFO" "PreToolUse: tool=${TOOL_NAME} desc=${DESCRIPTION} cmd=${COMMAND}"
 
-# ── Modify Protocol Experiment ──────────────────────────
-# Test #1: Full JSON replacement — modify tool_input.command directly.
-# If this works, Claude will execute the modified command.
-if echo "$COMMAND" | grep -qE '^echo[[:space:]]'; then
-    ORIGINAL="$COMMAND"
-    MODIFIED="echo \"[HOOK-MODIFIED] ${COMMAND#echo }\""
-    log_message "INFO" "PreToolUse MODIFY: original=[${ORIGINAL}] modified=[${MODIFIED}]"
+# Only optimize Bash tool calls
+if [[ "$TOOL_NAME" != "Bash" ]]; then
+    echo "$INPUT"
+    exit 0
+fi
 
-    # Full JSON replacement: update tool_input.command with jq
-    OUTPUT=$(echo "$INPUT" | jq -c --arg cmd "$MODIFIED" '.tool_input.command = $cmd')
+# Only optimize safe (read-only) commands
+is_safe_command "$COMMAND"
+SAFE_RESULT=$?
+
+if [[ $SAFE_RESULT -ne 0 ]]; then
+    log_message "INFO" "PreToolUse: skipping optimization (not safe, code=${SAFE_RESULT})"
+    echo "$INPUT"
+    exit 0
+fi
+
+# Try Copilot CLI optimization
+OPTIMIZED=$(optimize_command "$COMMAND" "$DESCRIPTION")
+OPT_RESULT=$?
+
+if [[ $OPT_RESULT -eq 0 && "$OPTIMIZED" != "$COMMAND" ]]; then
+    log_message "INFO" "PreToolUse: optimized cmd=[${OPTIMIZED}]"
+
+    # Full JSON replacement with optimized command
+    OUTPUT=$(echo "$INPUT" | jq -c --arg cmd "$OPTIMIZED" '.tool_input.command = $cmd')
     echo "$OUTPUT"
     exit 0
 fi
 
-# Default: passthrough unchanged
+# Passthrough unchanged
 echo "$INPUT"
 exit 0
