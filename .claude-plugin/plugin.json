@@ -1,0 +1,21 @@
+{
+  "name": "claude-hook-copilot",
+  "version": "3.1.0",
+  "description": "Bridge layer connecting Claude Code's top-down reasoning with Copilot CLI's bottom-up command optimization via hooks",
+  "author": {
+    "name": "whitebob",
+    "email": "",
+    "url": "https://github.com/whitebob/claude-hook-copilot"
+  },
+  "homepage": "https://github.com/whitebob/claude-hook-copilot",
+  "repository": "https://github.com/whitebob/claude-hook-copilot",
+  "license": "MIT",
+  "keywords": [
+    "copilot",
+    "shell",
+    "optimization",
+    "hooks",
+    "bash",
+    "command-line"
+  ]
+}
