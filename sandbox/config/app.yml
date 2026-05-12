@@ -1,0 +1,21 @@
+# Sandbox configuration
+
+# FIXME: redis host should use internal DNS
+# TODO: add production overrides
+
+server:
+  host: 0.0.0.0
+  port: 3000
+
+database:
+  host: localhost
+  port: 5432
+  name: myapp
+
+redis:
+  host: localhost
+  port: 6379
+
+logging:
+  level: debug
+  format: json

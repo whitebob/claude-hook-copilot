@@ -1,0 +1,37 @@
+/* style.css — Application styles */
+/* FIXME: CSS variables not consistently used */
+/* TODO: add dark mode support */
+
+:root {
+  --primary: #3366ff;
+  --error: #ff4444;
+  --success: #44bb44;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+  margin: 0;
+  padding: 16px;
+}
+
+.header {
+  background: var(--primary);
+  color: white;
+  padding: 12px 20px;
+}
+
+/* FIXME: button styles should use CSS modules */
+.button-primary {
+  background: #3366ff;  /* hardcoded, should use var(--primary) */
+  color: #ffffff;
+  border: none;
+  padding: 8px 20px;
+  border-radius: 4px;
+}
+
+.error-banner {
+  background: #ffebee;
+  color: #c62828;
+  padding: 12px;
+  border-left: 4px solid #c62828;
+}

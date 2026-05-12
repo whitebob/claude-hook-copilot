@@ -268,6 +268,179 @@ export COPILOT_BRIDGE_MODE=passthrough
 
 ## Changelog
 
+### v2.1 Decision Pipeline (Current)
+
+```
+                          ┌─────────────────────────┐
+                          │  Claude issues Bash cmd  │
+                          └────────────┬────────────┘
+                                       │
+                                       ▼
+                          ┌─────────────────────────┐
+                          │  PreToolUse Hook reads   │
+                          │  stdin JSON              │
+                          └────────────┬────────────┘
+                                       │
+                                       ▼
+                          ┌─────────────────────────┐
+                          │  H1: Time budget check   │
+                          │  (>10s? → passthrough)  │
+                          └────────────┬────────────┘
+                                       │ OK
+                                       ▼
+                          ┌─────────────────────────┐
+                          │  Bash tool only?         │──► No → PASSTHROUGH
+                          └────────────┬────────────┘
+                                       │ Yes
+                                       ▼
+                          ┌─────────────────────────┐
+                          │  is_safe_command()?      │──► DANGEROUS → SKIP
+                          │  (S0: safety classify)  │
+                          └────────────┬────────────┘
+                                       │ Safe
+                                       ▼
+                          ┌─────────────────────────┐
+                          │  extract_skeleton()      │
+                          │  normalize cmd → IR      │
+                          └────────────┬────────────┘
+                                       │
+                                       ▼
+                          ┌─────────────────────────┐
+                          │  S3: score_complexity()  │
+                          │  pipes+flags+subs+args   │
+                          └────────────┬────────────┘
+                                       │
+                         ┌─────────────┴─────────────┐
+                         │                           │
+                         ▼ score ≤ 2                 ▼ score ≥ 3
+              ┌──────────────────────┐    ┌──────────────────────┐
+              │  S5: cached except?   │    │  lookup_variant()     │
+              │  conf ≥ 0.7 in cache? │    │  in variants.jsonl?   │
+              └──────────┬───────────┘    └──────────┬───────────┘
+                         │                           │
+               ┌─────────┴─────────┐       ┌─────────┴─────────┐
+               │                   │       │                   │
+               ▼ Yes               ▼ No    ▼ HIT               ▼ MISS
+        ┌────────────┐    ┌────────────┐ ┌──────────┐  ┌──────────────┐
+        │ USE CACHED │    │ PASSTHROUGH│ │USE CACHED│  │ S4: latency  │
+        │ (exception)│    │ (skip)     │ │OPTIMIZED │  │ healthy?     │
+        └────────────┘    └────────────┘ └──────────┘  └──────┬───────┘
+                                                              │
+                                                    ┌─────────┴─────────┐
+                                                    │ Yes               │ No (avg>10s)
+                                                    ▼                   ▼
+                                             ┌──────────────┐  ┌──────────────┐
+                                             │ Copilot CLI  │  │ PASSTHROUGH  │
+                                             │ optimize     │  │ (skip)       │
+                                             │ (12s timeout)│  └──────────────┘
+                                             └──────┬───────┘
+                                                    │
+                                           ┌────────┴────────┐
+                                           │ OK              │ FAIL/TIMEOUT
+                                           ▼                 ▼
+                                    ┌──────────────┐  ┌──────────────┐
+                                    │ record       │  │ PASSTHROUGH  │
+                                    │ variant (0.5)│  │              │
+                                    │ write bridge │  └──────────────┘
+                                    └──────┬───────┘
+                                           │
+                                           ▼
+                                    ┌──────────────┐
+                                    │ jq replace   │
+                                    │ command in   │
+                                    │ JSON → stdout│
+                                    └──────────────┘
+                                           │
+                                           ▼
+                                    ┌──────────────┐
+                                    │ Bash executes │
+                                    │ optimized cmd │
+                                    └──────┬───────┘
+                                           │
+                                           ▼
+                              ┌─────────────────────────┐
+                              │  PostToolUse Hook        │
+                              │  read bridge state       │
+                              │  record_feedback()       │
+                              │  ±confidence update      │
+                              │  opportunistic cleanup   │
+                              └─────────────────────────┘
+```
+
+### v2.1 Defense-in-Depth Layers
+
+```
+   ┌─────────────────────────────────────────────────────────────┐
+   │                    DEFENSE LAYERS                           │
+   │                                                             │
+   │  Layer 1: EARLY EXIT                                        │
+   │  ┌───────────────────────────────────────────────────────┐  │
+   │  │ H1: Time budget >10s → passthrough (prevents timeout) │  │
+   │  │ S3: Complexity ≤2 → passthrough (simple commands)     │  │
+   │  │ Safety: rm/git push/sudo → passthrough (dangerous)    │  │
+   │  │ Non-Bash tools → passthrough (Read/Write/Edit)        │  │
+   │  └───────────────────────────────────────────────────────┘  │
+   │                          │                                  │
+   │                          ▼                                  │
+   │  Layer 2: CACHE FIRST                                       │
+   │  ┌───────────────────────────────────────────────────────┐  │
+   │  │ Variant cache hit → use optimized (skip Copilot CLI)  │  │
+   │  │ S5: Simple commands + high conf → still use cache     │  │
+   │  └───────────────────────────────────────────────────────┘  │
+   │                          │                                  │
+   │                          ▼                                  │
+   │  Layer 3: GUARDED OPTIMIZATION                              │
+   │  ┌───────────────────────────────────────────────────────┐  │
+   │  │ S4: Latency health check → too slow → skip            │  │
+   │  │ Copilot CLI timeout 12s → passthrough on failure      │  │
+   │  └───────────────────────────────────────────────────────┘  │
+   │                          │                                  │
+   │                          ▼                                  │
+   │  Layer 4: RESILIENCE                                        │
+   │  ┌───────────────────────────────────────────────────────┐  │
+   │  │ H2: ERROR trap → never exit non-zero (always 0)       │  │
+   │  │ H3: Atomic writes → tmp+mv (no corruption)            │  │
+   │  │ H4: safe_jq → parse failure → default value           │  │
+   │  └───────────────────────────────────────────────────────┘  │
+   └─────────────────────────────────────────────────────────────┘
+```
+
+### v2.1 Component Interaction Map
+
+```
+                      ┌──────────────────┐
+                      │   pre-tool-use.sh │
+                      │   (orchestrator)  │
+                      └────────┬─────────┘
+                               │ sources
+               ┌───────────────┼───────────────┐
+               │               │               │
+               ▼               ▼               ▼
+       ┌──────────────┐ ┌────────────┐ ┌──────────────┐
+       │ common.sh    │ │ copilot.sh │ │ variants.sh  │
+       │              │ │            │ │              │
+       │ • is_safe    │ │ • optimize │ │ • lookup     │
+       │ • skeleton   │ │ • track    │ │ • record     │
+       │ • score      │ │ • health   │ │ • feedback   │
+       │ • budget     │ │            │ │ • cleanup    │
+       │ • safe_jq    │ │            │ │              │
+       └──────┬───────┘ └─────┬──────┘ └──────┬───────┘
+              │               │               │
+              │               │               │
+              ▼               ▼               ▼
+       ┌────────────────────────────────────────────────┐
+       │              Persistent State                  │
+       │                                                │
+       │  variants.jsonl  ←── cache + confidence        │
+       │  feedback.jsonl  ←── execution history         │
+       │  latency.jsonl   ←── Copilot response times    │
+       │  .bridge/*.json  ←── pre→post communication    │
+       │  logs/*.log      ←── operational logging       │
+       └────────────────────────────────────────────────┘
+```
+
+## Changelog
+
 ### v2.1 — "Murphy's Armor" (2026-05-12)
 
 **S0: Hard Defenses (H1-H4)**
