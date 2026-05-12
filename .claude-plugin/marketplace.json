@@ -1,0 +1,18 @@
+{
+  "name": "claude-hook-copilot-marketplace",
+  "version": "1.0.0",
+  "description": "Marketplace index for claude-hook-copilot plugin",
+  "owner": {
+    "name": "whitebob",
+    "url": "https://github.com/whitebob/claude-hook-copilot"
+  },
+  "plugins": [
+    {
+      "name": "claude-hook-copilot",
+      "source": "github:whitebob/claude-hook-copilot@plugin",
+      "description": "Bridge layer connecting Claude Code's top-down reasoning with Copilot CLI's bottom-up command optimization via hooks. Automatically optimizes Bash commands (grep→rg, find→fd, pipe chains) with safety classifier, confidence-scored variant cache, and session-aware pair cache.",
+      "version": "3.1.0",
+      "category": "productivity"
+    }
+  ]
+}
