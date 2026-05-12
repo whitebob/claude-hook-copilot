@@ -180,6 +180,64 @@ extract_skeleton() {
     echo "$skeleton"
 }
 
+# ── Complexity Scorer (S3: scores command optimization value) ─
+
+# Scores a command 1-5 based on pipe count, subcommand count, flags, and arguments.
+#   score ≤ 2 → skip optimization (simple enough, passthrough)
+#   score ≥ 3 → allow optimization (cache lookup → Copilot CLI)
+score_complexity() {
+    local cmd="$1"
+    local score=1
+
+    # Count pipes (each pipe adds structural complexity)
+    local pipes
+    pipes=$(echo "$cmd" | grep -o '|' | wc -l)
+
+    # Count subcommands $() and backticks
+    local subcommands
+    subcommands=$(echo "$cmd" | grep -oE '\$\(|`' | wc -l)
+
+    # Count flags (long and short, first char after dash must be a letter)
+    local flags
+    flags=$(echo "$cmd" | grep -oE '\s--?[a-zA-Z][a-zA-Z0-9-]*' | wc -l)
+
+    # Count non-flag, non-operator arguments
+    local args
+    args=$(echo "$cmd" | sed 's/|/ /g; s/&&/ /g; s/||/ /g; s/;/ /g' | tr ' ' '\n' | grep -vE '^-|^$' | wc -l)
+
+    # Pipe scoring: 0 pipes = 0, 1-2 = +1, 3+ = +2
+    if [[ $pipes -ge 3 ]]; then
+        score=$((score + 2))
+    elif [[ $pipes -ge 1 ]]; then
+        score=$((score + 1))
+    fi
+
+    # Subcommand scoring: $() or backticks
+    if [[ $subcommands -ge 1 ]]; then
+        score=$((score + 1))
+    fi
+
+    # Flag scoring: 2+ flags suggest configurable intent
+    if [[ $flags -ge 2 ]]; then
+        score=$((score + 1))
+    fi
+
+    # Argument scoring: 6+ non-flag args suggest complex filtering/selection
+    if [[ $args -ge 6 ]]; then
+        score=$((score + 1))
+    fi
+
+    # Clamp to [1, 5]
+    if [[ $score -gt 5 ]]; then
+        score=5
+    fi
+    if [[ $score -lt 1 ]]; then
+        score=1
+    fi
+
+    echo "$score"
+}
+
 # ── JSON Helpers ─────────────────────────────────────────
 
 # Extract a field from hook stdin JSON, trying both tool_input and input conventions

@@ -48,16 +48,39 @@ if [[ $SAFE_RESULT -ne 0 ]]; then
     exit 0
 fi
 
+# Extract skeleton early (used by both S3/S5 and cache lookup)
+SKELETON=$(extract_skeleton "$COMMAND")
+
+# S3: Complexity scorer — skip simple commands (score ≤ 2)
+COMPLEXITY=$(score_complexity "$COMMAND")
+log_message "INFO" "PreToolUse: complexity_score=${COMPLEXITY} cmd=${COMMAND}"
+
+if [[ "$COMPLEXITY" -le 2 ]]; then
+    # S5: Simple-cached exception — use cache even for simple commands if conf ≥ 0.7
+    _saved_threshold="$CONFIDENCE_THRESHOLD"
+    CONFIDENCE_THRESHOLD="${S5_CONFIDENCE_THRESHOLD:-0.7}"
+    CACHED=$(lookup_variant "$SKELETON" 2>/dev/null || true)
+    CONFIDENCE_THRESHOLD="$_saved_threshold"
+    if [[ -n "$CACHED" ]]; then
+        log_message "INFO" "PreToolUse: S5 cached exception (score=${COMPLEXITY}, conf≥threshold)"
+        write_bridge_state "$TOOL_CALL_ID" "$SKELETON" "$COMMAND" "$CACHED"
+        OUTPUT=$(echo "$INPUT" | jq -c --arg cmd "$CACHED" '.tool_input.command = $cmd' 2>/dev/null || echo "$INPUT")
+        echo "$OUTPUT"
+        exit 0
+    fi
+
+    log_message "INFO" "PreToolUse: skipping optimization (low complexity, score=${COMPLEXITY})"
+    echo "$INPUT"
+    exit 0
+fi
+
 # H1: Check time budget before expensive operations
 if ! check_time_budget; then
     echo "$INPUT"
     exit 0
 fi
 
-# Extract skeleton for variant lookup
-SKELETON=$(extract_skeleton "$COMMAND")
-
-# Check variant cache first
+# Check variant cache (score ≥ 3, may still have cache hit)
 CACHED=$(lookup_variant "$SKELETON" 2>/dev/null || true)
 if [[ -n "$CACHED" ]]; then
     log_message "INFO" "PreToolUse: variant cache hit, using cached optimization"

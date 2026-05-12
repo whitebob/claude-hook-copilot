@@ -243,23 +243,66 @@ export COPILOT_BRIDGE_MODE=passthrough
 
 ## Failure Degradation
 
-| Failure | Response |
-|---------|----------|
-| Copilot CLI unavailable | Passthrough original command |
-| Copilot timeout (12s) | Passthrough original command |
-| JSONL parse error | Passthrough, log warning |
-| Hook script error | Exit 2 → Claude blocks the call |
-| Variant low confidence | Skip cache, re-query Copilot |
-| Variant file corruption | Skip cache, re-query Copilot |
-| Bridge state lost | Skip feedback recording |
+| Failure | Response | v2.1 Protection |
+|---------|----------|-----------------|
+| Copilot CLI unavailable | Passthrough original command | — |
+| Copilot timeout (12s) | Passthrough original command | S4: auto-disable if avg latency >10s |
+| Copilot avg latency > 10s | Skip Copilot, passthrough | S4: `is_copilot_latency_healthy()` gate |
+| JSONL parse error | Passthrough, log warning | H4: `safe_jq()` never crashes |
+| Hook script error | Exit 0 with original input (H2) | H2: ERROR trap |
+| Hook approaching 15s timeout | Force passthrough (H1) | H1: `check_time_budget()` at 10s |
+| Variant low confidence | Skip cache, re-query Copilot | — |
+| Variant file corruption | Skip cache, re-query Copilot | H3: atomic writes prevent corruption |
+| Bridge state lost | Skip feedback recording | H3: tmp+mv prevents partial writes |
+| Simple command (score ≤ 2) | Passthrough directly (S3) | S3: complexity scorer |
+| Proven simple command (conf ≥ 0.7) | Use cached optimization (S5) | S5: cached exception |
 
 ## Known Limitations
 
-- **Copilot CLI latency**: First query takes 6-12 seconds; variant cache hits reduce this to zero
+- **Copilot CLI latency**: First query takes 6-12 seconds; variant cache hits reduce this to zero; S4 auto-disables if avg > 10s
 - **Hook survival**: Hooks are loaded at session start; may not survive Claude Code session compaction
-- **Single-command optimization**: Currently optimizes one command at a time; no cross-command predictive optimization
-- **No goal awareness**: Hook input does not expose the user's high-level goal — decisions are based purely on the command string
+- **Single-command optimization**: Currently optimizes one command at a time; pair/sequence caching (B axis) deferred to Turn 3
+- **No goal awareness**: Hook input does not expose the user's high-level goal — decisions are based purely on the command string; goal extraction (C axis) deferred to Turn 3
 - **Skeleton granularity**: Same skeleton may match commands with different intent (e.g., `grep -r 'foo' --include='*.ts'` and `grep -r 'bar' --include='*.py'` share a skeleton)
+- **Complexity threshold static**: Score threshold (≤2 skip) is fixed; auto-calibration needs scorer deployment data first (deferred to Turn 3)
+
+## Changelog
+
+### v2.1 — "Murphy's Armor" (2026-05-12)
+
+**S0: Hard Defenses (H1-H4)**
+| Defense | Mechanism | Protects Against |
+|---------|-----------|-----------------|
+| H1 Time Watchdog | `check_time_budget()` — auto-passthrough after 10s | Hook timeout cascade (≥15s kills all Bash) |
+| H2 ERROR Trap | `trap 'echo "$ORIGINAL_INPUT"; exit 0' ERR` | Accidental non-zero exit = blocked tool call |
+| H3 Atomic Writes | `write → .tmp → mv` for all files | Bridge state corruption under concurrent writes |
+| H4 jq Tolerance | `safe_jq()` wrapper with `\|\| true` fallback | Parse failures crashing post-tool-use |
+
+**S1: Test Corpus** — 44 regression tests covering:
+- Complexity scorer (16 test cases, scores 1-5)
+- Safety classifier (20 test cases: safe/dangerous/unknown)
+- Skeleton extraction (8 test cases: literal/path/glob/num placeholders)
+- 7 real Claude command patterns with classification verification
+
+**S3: Complexity Scorer** — `score_complexity()` rates commands 1-5:
+- Dimensions: pipe count, flag count, subcommand count, argument count
+- Threshold: score ≤ 2 → skip optimization (passthrough)
+- Threshold: score ≥ 3 → allow optimization (cache → Copilot CLI)
+
+**S4: Latency Tracker** — `~/.claude/copilot-cli-hook/latency.jsonl`:
+- Sliding window average of last 10 Copilot calls
+- Auto-disable Copilot optimization when avg latency > 10s
+- Tracks success/failure per call
+
+**S5: Simple-Cached Exception** — score ≤ 2 but conf ≥ 0.7:
+- Even simple commands use cached optimizations when highly trusted
+- Avoids re-optimizing proven command patterns
+
+### v1.0 — Initial Release (2026-05-11)
+
+- Phase 1: Passthrough hooks with JSON flow verification
+- Phase 2: Copilot CLI command optimization for safe commands
+- Phase 3: Feedback loop and variant library with confidence scoring
 
 ## Development
 
