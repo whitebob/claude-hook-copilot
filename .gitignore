@@ -3,7 +3,8 @@ variants.jsonl
 feedback.jsonl
 *.jsonl
 
-# Logs
+# Bridge state (runtime)
+.bridge/
 logs/
 *.log
 
