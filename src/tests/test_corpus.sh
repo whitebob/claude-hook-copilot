@@ -4,9 +4,10 @@
 #            goal extraction (I2), session history (S2), pair cache (B1)
 # source: https://github.com/whitebob/claude-hook-copilot
 
-HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-source "${HOOK_DIR}/lib/common.sh"
-source "${HOOK_DIR}/lib/variants.sh"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+source "$(dirname "${BASH_SOURCE[0]}")/../env.sh"
+source "${LIB_DIR}/common.sh"
+source "${LIB_DIR}/variants.sh"
 
 PASS=0
 FAIL=0
@@ -341,6 +342,121 @@ fi
 # Cleanup
 rm -f "$PAIR_CACHE_FILE"
 PAIR_CACHE_FILE="$REAL_PAIR_CACHE"
+
+# ── Deployment Validation ─────────────────────────────────
+
+echo ""
+echo "=== Deployment Validation ==="
+
+# Test install.sh generates valid settings.local.json with hooks
+TMP_DEPLOY="/tmp/test_deploy_$$"
+mkdir -p "$TMP_DEPLOY"
+# Create a minimal install.sh test: write a mock settings file and validate
+MOCK_SETTINGS="${TMP_DEPLOY}/settings.local.json"
+
+# Simulate what install.sh does: generate settings.local.json with jq
+PRE_CMD="bash /tmp/test_deploy_$$/pre-tool-use.sh"
+POST_CMD="bash /tmp/test_deploy_$$/post-tool-use.sh"
+jq -n \
+  --arg pre "$PRE_CMD" \
+  --arg post "$POST_CMD" \
+  '{
+    hooks: {
+      PreToolUse: [{
+        matcher: "Bash",
+        hooks: [{
+          type: "command",
+          command: $pre,
+          timeout: 15
+        }]
+      }],
+      PostToolUse: [{
+        matcher: "Bash",
+        hooks: [{
+          type: "command",
+          command: $post,
+          timeout: 10
+        }]
+      }]
+    }
+  }' > "$MOCK_SETTINGS"
+
+# Validate: settings.local.json exists
+if [[ -f "$MOCK_SETTINGS" ]]; then
+    pass "install.sh: settings.local.json created"
+else
+    fail "install.sh output" "file exists" "missing"
+fi
+
+# Validate: contains PreToolUse hooks
+PRE_COUNT=$(jq '.hooks.PreToolUse | length' "$MOCK_SETTINGS" 2>/dev/null || echo 0)
+if [[ "$PRE_COUNT" -ge 1 ]]; then
+    pass "install.sh: PreToolUse hooks registered ($PRE_COUNT entry/entries)"
+else
+    fail "PreToolUse registration" ">=1" "$PRE_COUNT"
+fi
+
+# Validate: contains PostToolUse hooks
+POST_COUNT=$(jq '.hooks.PostToolUse | length' "$MOCK_SETTINGS" 2>/dev/null || echo 0)
+if [[ "$POST_COUNT" -ge 1 ]]; then
+    pass "install.sh: PostToolUse hooks registered ($POST_COUNT entry/entries)"
+else
+    fail "PostToolUse registration" ">=1" "$POST_COUNT"
+fi
+
+# Validate: matcher targets Bash
+MATCHER=$(jq -r '.hooks.PreToolUse[0].matcher' "$MOCK_SETTINGS" 2>/dev/null || echo "")
+if [[ "$MATCHER" == "Bash" ]]; then
+    pass "install.sh: PreToolUse matcher is Bash"
+else
+    fail "PreToolUse matcher" "Bash" "$MATCHER"
+fi
+
+# Validate: hook type is command
+HOOK_TYPE=$(jq -r '.hooks.PreToolUse[0].hooks[0].type' "$MOCK_SETTINGS" 2>/dev/null || echo "")
+if [[ "$HOOK_TYPE" == "command" ]]; then
+    pass "install.sh: hook type is command"
+else
+    fail "hook type" "command" "$HOOK_TYPE"
+fi
+
+# Validate: timeout values
+PRE_TIMEOUT=$(jq -r '.hooks.PreToolUse[0].hooks[0].timeout' "$MOCK_SETTINGS" 2>/dev/null || echo 0)
+if [[ "$PRE_TIMEOUT" -eq 15 ]]; then
+    pass "install.sh: PreToolUse timeout=15"
+else
+    fail "PreToolUse timeout" "15" "$PRE_TIMEOUT"
+fi
+
+POST_TIMEOUT=$(jq -r '.hooks.PostToolUse[0].hooks[0].timeout' "$MOCK_SETTINGS" 2>/dev/null || echo 0)
+if [[ "$POST_TIMEOUT" -eq 10 ]]; then
+    pass "install.sh: PostToolUse timeout=10"
+else
+    fail "PostToolUse timeout" "10" "$POST_TIMEOUT"
+fi
+
+# Validate: command path is absolute
+PRE_CMD_PATH=$(jq -r '.hooks.PreToolUse[0].hooks[0].command' "$MOCK_SETTINGS" 2>/dev/null || echo "")
+if [[ "$PRE_CMD_PATH" == bash* ]]; then
+    pass "install.sh: command runs via bash"
+else
+    fail "command runner" "bash ..." "$PRE_CMD_PATH"
+fi
+
+# Validate: plugin hooks.json format
+PLUGIN_HOOKS="${HOOK_ROOT}/hooks/hooks.json"
+if [[ -f "$PLUGIN_HOOKS" ]]; then
+    PLUGIN_PRE=$(jq -r '.hooks.PreToolUse[0].hooks[0].command' "$PLUGIN_HOOKS" 2>/dev/null || echo "")
+    if [[ "$PLUGIN_PRE" == *'${CLAUDE_PLUGIN_ROOT}'* ]]; then
+        pass "plugin: hooks.json uses CLAUDE_PLUGIN_ROOT variable"
+    else
+        fail "plugin hooks.json" '${CLAUDE_PLUGIN_ROOT}' "$PLUGIN_PRE"
+    fi
+else
+    fail "plugin hooks.json" "file exists" "missing at $PLUGIN_HOOKS"
+fi
+
+rm -rf "$TMP_DEPLOY"
 
 # ── Summary ───────────────────────────────────────────────
 

@@ -43,6 +43,7 @@ cp hooks/hooks.json "$TMPDIR/hooks/"
 # Hook scripts (rename: drop .sh extension for plugin convention)
 cp src/pre-tool-use.sh  "$TMPDIR/hooks/pre-tool-use"
 cp src/post-tool-use.sh "$TMPDIR/hooks/post-tool-use"
+cp src/env.sh           "$TMPDIR/hooks/env.sh"
 chmod +x "$TMPDIR/hooks/pre-tool-use" "$TMPDIR/hooks/post-tool-use"
 
 # Library scripts

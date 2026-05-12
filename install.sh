@@ -15,6 +15,7 @@ mkdir -p "${TARGET_DIR}/logs"
 echo "[OK] Created ${TARGET_DIR}"
 
 # 2. Copy all source files
+cp "${SOURCE_DIR}/env.sh" "${TARGET_DIR}/env.sh"
 cp "${SOURCE_DIR}/pre-tool-use.sh" "${TARGET_DIR}/pre-tool-use.sh"
 cp "${SOURCE_DIR}/post-tool-use.sh" "${TARGET_DIR}/post-tool-use.sh"
 cp "${SOURCE_DIR}/lib/"*.sh "${TARGET_DIR}/lib/" 2>/dev/null || true

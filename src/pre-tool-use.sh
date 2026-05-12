@@ -11,10 +11,10 @@ HOOK_START_TIME=$SECONDS
 ORIGINAL_INPUT=""
 trap 'if [[ -n "$ORIGINAL_INPUT" ]]; then echo "$ORIGINAL_INPUT"; fi; exit 0' ERR
 
-HOOK_DIR="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
-source "${HOOK_DIR}/lib/common.sh"
-source "${HOOK_DIR}/lib/copilot.sh"
-source "${HOOK_DIR}/lib/variants.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/env.sh"
+source "${LIB_DIR}/common.sh"
+source "${LIB_DIR}/copilot.sh"
+source "${LIB_DIR}/variants.sh"
 
 # Read stdin (hook input JSON)
 INPUT=$(cat)

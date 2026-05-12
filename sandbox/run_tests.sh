@@ -2,8 +2,11 @@
 # Each test validates: naive_command → copilot_optimized → outputs match
 
 BASE_DIR="$(cd "$(dirname "$0")" && pwd)"
-cd "$BASE_DIR/.." || exit 1
-SANDBOX="$(pwd)/sandbox"
+REPO_ROOT="$(cd "$BASE_DIR/.." && pwd)"
+SANDBOX="${REPO_ROOT}/sandbox"
+
+source "${REPO_ROOT}/src/env.sh"
+source "${LIB_DIR}/common.sh"
 
 PASS=0
 FAIL=0
@@ -23,14 +26,12 @@ run_test() {
 
     # Get complexity score
     local score
-    score=$(HOOK_DIR="$BASE_DIR/../src" source "$BASE_DIR/../src/lib/common.sh" && score_complexity "$naive" 2>/dev/null || echo "?")
+    score=$(score_complexity "$naive" 2>/dev/null || echo "?")
     echo "  Complexity:   score=$score"
 
     # Check if safe
-    local safe_result
-    HOOK_DIR="$BASE_DIR/../src" source "$BASE_DIR/../src/lib/common.sh" 2>/dev/null
     is_safe_command "$naive" 2>/dev/null
-    safe_result=$?
+    local safe_result=$?
     if [[ $safe_result -eq 0 ]]; then
         echo "  Safety:       SAFE"
     elif [[ $safe_result -eq 1 ]]; then
@@ -50,7 +51,7 @@ run_test() {
 
     # Show skeleton
     local skeleton
-    skeleton=$(HOOK_DIR="$BASE_DIR/../src" source "$BASE_DIR/../src/lib/common.sh" && extract_skeleton "$naive" 2>/dev/null || echo "?")
+    skeleton=$(extract_skeleton "$naive" 2>/dev/null || echo "?")
     echo "  Skeleton:     $skeleton"
 
     echo "  Output (first 3 lines):"
@@ -113,7 +114,7 @@ run_test \
 # ── Pattern 9: Intent Protocol — [GOAL: ...] marker ───────
 echo "=== I2: Goal Extraction Test ==="
 GOAL_TEST="[GOAL: find all authentication-related TODO items] grep -r 'TODO' src/ --include='*.ts'"
-GOAL=$(HOOK_DIR="$BASE_DIR/../src" source "$BASE_DIR/../src/lib/common.sh" && extract_goal "$GOAL_TEST" 2>/dev/null || echo "?")
+GOAL=$(extract_goal "$GOAL_TEST" 2>/dev/null || echo "?")
 echo "  Test desc: $GOAL_TEST"
 echo "  Extracted goal: '$GOAL'"
 if [[ "$GOAL" == "find all authentication-related TODO items" ]]; then

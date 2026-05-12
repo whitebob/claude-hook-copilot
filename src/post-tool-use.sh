@@ -6,9 +6,9 @@
 # H2: ERROR trap — never let hook exit non-zero
 trap 'exit 0' ERR
 
-HOOK_DIR="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
-source "${HOOK_DIR}/lib/common.sh"
-source "${HOOK_DIR}/lib/variants.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/env.sh"
+source "${LIB_DIR}/common.sh"
+source "${LIB_DIR}/variants.sh"
 
 # Read stdin (hook input JSON)
 INPUT=$(cat)
