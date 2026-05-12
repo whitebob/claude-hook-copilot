@@ -1,0 +1,8 @@
+# Runtime state (created at plugin execution time)
+logs/
+.bridge/
+variants.jsonl
+feedback.jsonl
+latency.jsonl
+session.jsonl
+pair_cache.jsonl
