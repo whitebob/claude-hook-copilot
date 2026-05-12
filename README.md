@@ -64,20 +64,17 @@ A bridge layer that connects Claude Code's top-down reasoning with Copilot CLI's
 Claude doesn't know the bridge exists. From its perspective, every Bash command it writes goes directly to execution — so it must invest cognitive budget in getting bash syntax, flags, tool selection, and pipeline construction exactly right. If it doesn't, the user blames Claude alone.
 
 ```
-   What Claude Sees                   What the Bridge Sees
-   ┌────────────────────┐            ┌────────────────────────────┐
-   │ User: "find TODOs"  │            │ stdin: {tool_name, cmd,     │
-   │                     │            │   description, tool_call_id} │
-   │ Claude thinks:      │            │                            │
-   │ "I must write       │            │ variants.jsonl: history of  │
-   │  correct bash or    │            │ what worked before          │
-   │  the user will      │            │                            │
-   │  blame ME"          │            │ Copilot CLI: can optimize   │
-   │                     │            │ this command                │
-   │ Blind spot:         │            │                            │
-   │ Bridge exists ──────┼───────────►│ Blind spot:                │
-   │ Copilot available   │            │ Claude's full task context  │
-   └────────────────────┘            └────────────────────────────┘
+      Claude                       Bridge                     Copilot
+  ┌──────────────┐           ┌──────────────┐           ┌──────────────┐
+  │              │           │              │           │              │
+  │ Sees:        │           │ Sees:        │           │ Sees:        │
+  │ user intent  │           │ task context │           │ command only │
+  │ task context │           │ variant hist │           │              │
+  │              │  ──────►  │ description  │  ──────►  │              │
+  │ Blind spot:  │           │ raw command  │           │ Blind spot:  │
+  │ Bridge,      │           │              │           │ task context │
+  │ Copilot      │           │              │           │ user intent  │
+  └──────────────┘           └──────────────┘           └──────────────┘
 ```
 
 This is a coordination trap: both systems want the user to succeed, but Claude can't delegate because it doesn't know the delegate exists.
