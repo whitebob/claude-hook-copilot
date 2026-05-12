@@ -3,13 +3,10 @@
 A bridge layer that connects Claude Code's top-down reasoning with Copilot CLI's bottom-up command optimization — via Claude Code's hooks mechanism.
 
 ```
-     .===.                   .---.
-    //o o\\                 } @ @ {
-    \\_v_//      ═════      \_-_/
-  o==|ooo|==o             .=[::+]=.
-     |___|                '=[___]='
-    /     \                /|   |\
-   [_]   [_]              [_]   [_]
+      ▐▛███▜▌             ╭─╮╭─╮
+     ▝▜█████▛▘            ╰─╯╰─╯
+       ▘▘ ▝▝              █ ▘▝ █
+                          ▔▔▔▔
 
     C L A U D E           C O P I L O T
         └─────────┬─────────┘
