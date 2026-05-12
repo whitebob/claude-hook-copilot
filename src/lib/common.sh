@@ -141,3 +141,35 @@ get_field() {
     val=$(echo "$json" | jq -r ".tool_input.${field} // .input.${field} // \"\"")
     echo "$val"
 }
+
+# ── Bridge State (pre-tool-use → post-tool-use) ─────────
+
+BRIDGE_DIR="${HOOK_DIR}/.bridge"
+
+# Write bridge state so post-tool-use knows what optimization was applied.
+# Args: tool_call_id, skeleton, original_command, optimized_command
+write_bridge_state() {
+    local call_id="$1"
+    local skeleton="$2"
+    local original="$3"
+    local optimized="$4"
+
+    mkdir -p "$BRIDGE_DIR" 2>/dev/null || true
+    jq -nc \
+        --arg sk "$skeleton" \
+        --arg orig "$original" \
+        --arg opt "$optimized" \
+        '{skeleton: $sk, original_command: $orig, optimized_command: $opt}' \
+        > "${BRIDGE_DIR}/${call_id}.json" 2>/dev/null || true
+}
+
+# Read bridge state for a given tool_call_id.
+# Output: JSON on stdout (empty if not found)
+read_bridge_state() {
+    local call_id="$1"
+    local path="${BRIDGE_DIR}/${call_id}.json"
+    if [[ -f "$path" ]]; then
+        cat "$path"
+        rm -f "$path"  # Clean up after reading
+    fi
+}
