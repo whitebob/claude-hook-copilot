@@ -110,4 +110,17 @@ run_test \
     "grep -o '\"username\": *\"[^\"]*\"' data/seed.json" \
     "Claude greps JSON. Copilot should suggest jq for proper JSON parsing."
 
+# ── Pattern 9: Intent Protocol — [GOAL: ...] marker ───────
+echo "=== I2: Goal Extraction Test ==="
+GOAL_TEST="[GOAL: find all authentication-related TODO items] grep -r 'TODO' src/ --include='*.ts'"
+GOAL=$(HOOK_DIR="$BASE_DIR/../src" source "$BASE_DIR/../src/lib/common.sh" && extract_goal "$GOAL_TEST" 2>/dev/null || echo "?")
+echo "  Test desc: $GOAL_TEST"
+echo "  Extracted goal: '$GOAL'"
+if [[ "$GOAL" == "find all authentication-related TODO items" ]]; then
+    echo "  Result: PASS"
+else
+    echo "  Result: FAIL (expected 'find all authentication-related TODO items')"
+fi
+echo ""
+
 echo "=== Summary ==="

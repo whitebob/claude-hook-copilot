@@ -238,6 +238,21 @@ score_complexity() {
     echo "$score"
 }
 
+# ── Goal Extraction (I2: parses [GOAL: ...] from description) ─
+
+# Extract goal text from a command description.
+# Matches [GOAL: <goal text>] anywhere in the description.
+# Output: goal text on stdout (empty string if no marker found)
+extract_goal() {
+    local desc="$1"
+    local goal
+    goal=$(echo "$desc" | grep -oP '\[GOAL:\s*\K[^]]+' | head -1 2>/dev/null || true)
+    if [[ -n "$goal" ]]; then
+        goal=$(echo "$goal" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+    fi
+    echo "$goal"
+}
+
 # ── JSON Helpers ─────────────────────────────────────────
 
 # Extract a field from hook stdin JSON, trying both tool_input and input conventions
@@ -255,12 +270,13 @@ get_field() {
 BRIDGE_DIR="${HOOK_DIR}/.bridge"
 
 # Write bridge state so post-tool-use knows what optimization was applied.
-# Args: tool_call_id, skeleton, original_command, optimized_command
+# Args: tool_call_id, skeleton, original_command, optimized_command, [prev_skeleton]
 write_bridge_state() {
     local call_id="$1"
     local skeleton="$2"
     local original="$3"
     local optimized="$4"
+    local prev_skeleton="${5:-}"
 
     mkdir -p "$BRIDGE_DIR" 2>/dev/null || true
     local content
@@ -268,7 +284,8 @@ write_bridge_state() {
         --arg sk "$skeleton" \
         --arg orig "$original" \
         --arg opt "$optimized" \
-        '{skeleton: $sk, original_command: $orig, optimized_command: $opt}' 2>/dev/null) || true
+        --arg psk "$prev_skeleton" \
+        '{skeleton: $sk, original_command: $orig, optimized_command: $opt, prev_skeleton: $psk}' 2>/dev/null) || true
     if [[ -n "$content" ]]; then
         atomic_write_json "${BRIDGE_DIR}/${call_id}.json" "$content"
     fi

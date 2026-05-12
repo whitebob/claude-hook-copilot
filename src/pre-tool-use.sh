@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # pre-tool-use.sh -- PreToolUse hook for copilot-cli-hook
-# v2.1: Complexity scorer + hard defenses (time budget, ERROR trap, atomic writes)
+# v3.0: Intent protocol (goal extraction, enhanced prompts, session history, pair cache)
 # source: https://github.com/whitebob/claude-hook-copilot
 
 # H1: Time budget tracking starts immediately
@@ -32,6 +32,12 @@ DESCRIPTION=$(get_field "$INPUT" "description")
 
 log_message "INFO" "PreToolUse: tool=${TOOL_NAME} desc=${DESCRIPTION} cmd=${COMMAND}"
 
+# I2: Extract [GOAL: ...] from description for enhanced Copilot prompts
+GOAL=$(extract_goal "$DESCRIPTION")
+if [[ -n "$GOAL" ]]; then
+    log_message "INFO" "PreToolUse: goal extracted=[${GOAL}]"
+fi
+
 # Only optimize Bash tool calls
 if [[ "$TOOL_NAME" != "Bash" ]]; then
     echo "$INPUT"
@@ -51,6 +57,9 @@ fi
 # Extract skeleton early (used by both S3/S5 and cache lookup)
 SKELETON=$(extract_skeleton "$COMMAND")
 
+# B1: Get previous skeleton for pair cache lookup
+PREV_SKELETON=$(get_prev_skeleton 2>/dev/null || true)
+
 # S3: Complexity scorer — skip simple commands (score ≤ 2)
 COMPLEXITY=$(score_complexity "$COMMAND")
 log_message "INFO" "PreToolUse: complexity_score=${COMPLEXITY} cmd=${COMMAND}"
@@ -63,7 +72,7 @@ if [[ "$COMPLEXITY" -le 2 ]]; then
     CONFIDENCE_THRESHOLD="$_saved_threshold"
     if [[ -n "$CACHED" ]]; then
         log_message "INFO" "PreToolUse: S5 cached exception (score=${COMPLEXITY}, conf≥threshold)"
-        write_bridge_state "$TOOL_CALL_ID" "$SKELETON" "$COMMAND" "$CACHED"
+        write_bridge_state "$TOOL_CALL_ID" "$SKELETON" "$COMMAND" "$CACHED" "$PREV_SKELETON"
         OUTPUT=$(echo "$INPUT" | jq -c --arg cmd "$CACHED" '.tool_input.command = $cmd' 2>/dev/null || echo "$INPUT")
         echo "$OUTPUT"
         exit 0
@@ -81,12 +90,27 @@ if ! check_time_budget; then
 fi
 
 # Check variant cache (score ≥ 3, may still have cache hit)
-CACHED=$(lookup_variant "$SKELETON" 2>/dev/null || true)
+# B1: Try pair cache first (higher specificity than single cache)
+CACHED=""
+if [[ -n "$PREV_SKELETON" ]]; then
+    CACHED=$(lookup_pair_variant "$PREV_SKELETON" "$SKELETON" 2>/dev/null || true)
+    if [[ -n "$CACHED" ]]; then
+        log_message "INFO" "PreToolUse: pair cache hit, using cached optimization"
+    fi
+fi
+
+# Fall back to single cache if pair cache missed
+if [[ -z "$CACHED" ]]; then
+    CACHED=$(lookup_variant "$SKELETON" 2>/dev/null || true)
+    if [[ -n "$CACHED" ]]; then
+        log_message "INFO" "PreToolUse: variant cache hit, using cached optimization"
+    fi
+fi
+
 if [[ -n "$CACHED" ]]; then
-    log_message "INFO" "PreToolUse: variant cache hit, using cached optimization"
     OPTIMIZED="$CACHED"
 
-    write_bridge_state "$TOOL_CALL_ID" "$SKELETON" "$COMMAND" "$OPTIMIZED"
+    write_bridge_state "$TOOL_CALL_ID" "$SKELETON" "$COMMAND" "$OPTIMIZED" "$PREV_SKELETON"
 
     OUTPUT=$(echo "$INPUT" | jq -c --arg cmd "$OPTIMIZED" '.tool_input.command = $cmd' 2>/dev/null || echo "$INPUT")
     echo "$OUTPUT"
@@ -100,18 +124,32 @@ if ! check_time_budget; then
 fi
 
 # Cache miss — try Copilot CLI optimization
-OPTIMIZED=$(optimize_command "$COMMAND" "$DESCRIPTION")
+OPTIMIZED=$(optimize_command "$COMMAND" "$DESCRIPTION" "$GOAL")
 OPT_RESULT=$?
 
 if [[ $OPT_RESULT -eq 0 && "$OPTIMIZED" != "$COMMAND" ]]; then
     log_message "INFO" "PreToolUse: Copilot optimized cmd=[${OPTIMIZED}]"
 
     record_variant "$SKELETON" "$COMMAND" "$OPTIMIZED"
-    write_bridge_state "$TOOL_CALL_ID" "$SKELETON" "$COMMAND" "$OPTIMIZED"
+
+    # B1: Record pair cache entry if we have a previous skeleton
+    if [[ -n "$PREV_SKELETON" ]]; then
+        record_pair_variant "$PREV_SKELETON" "$SKELETON" "$OPTIMIZED"
+    fi
+
+    # S2: Record to session history for future pair lookups
+    record_session "$SKELETON" "$GOAL"
+
+    write_bridge_state "$TOOL_CALL_ID" "$SKELETON" "$COMMAND" "$OPTIMIZED" "$PREV_SKELETON"
 
     OUTPUT=$(echo "$INPUT" | jq -c --arg cmd "$OPTIMIZED" '.tool_input.command = $cmd' 2>/dev/null || echo "$INPUT")
     echo "$OUTPUT"
     exit 0
+fi
+
+# S2: Record session even on passthrough (score ≥ 3, but optimization failed)
+if [[ "$COMPLEXITY" -ge 3 ]]; then
+    record_session "$SKELETON" "$GOAL"
 fi
 
 # Passthrough unchanged

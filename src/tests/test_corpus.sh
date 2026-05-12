@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
-# test_corpus.sh — Regression test corpus for claude-hook-copilot v2.1
-# Validates: complexity scorer, safety classifier, skeleton extraction, variant lifecycle
+# test_corpus.sh — Regression test corpus for claude-hook-copilot v3.0
+# Validates: complexity scorer, safety classifier, skeleton extraction, variant lifecycle,
+#            goal extraction (I2), session history (S2), pair cache (B1)
 # source: https://github.com/whitebob/claude-hook-copilot
 
 HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "${HOOK_DIR}/lib/common.sh"
+source "${HOOK_DIR}/lib/variants.sh"
 
 PASS=0
 FAIL=0
@@ -188,6 +190,157 @@ echo "  Pattern 7: $PATTERN7"
 echo "    Description: $PATTERN7_DESC"
 echo "    Score: $(score_complexity "$PATTERN7")"
 echo "    Safe: $(is_safe_command "$PATTERN7" && echo yes || echo no)"
+
+# ── I2: Goal Extraction ────────────────────────────────────
+
+echo ""
+echo "=== Goal Extraction (I2) ==="
+
+check_goal() {
+    local desc="$1"
+    local expected="$2"
+    local got
+    got=$(extract_goal "$desc")
+    if [[ "$got" == "$expected" ]]; then
+        pass "goal='$expected': ${desc:0:60}"
+    else
+        fail "goal extraction" "$expected" "$got"
+        echo "        desc: $desc"
+    fi
+}
+
+check_goal "[GOAL: find all TODO markers in the codebase] grep -r TODO ." "find all TODO markers in the codebase"
+check_goal "[GOAL: count error frequencies by source file] cat logs/app.log" "count error frequencies by source file"
+check_goal "List all files in the current directory" ""
+check_goal "grep -r 'import' --include='*.ts' ." ""
+check_goal "[GOAL: aggregate and sort by count] find . -name '*.log' | xargs grep ERROR | sort | uniq -c" "aggregate and sort by count"
+check_goal "[GOAL: extract usernames from JSON] grep -o '\"username\": *\"[^\"]*\"' data.json" "extract usernames from JSON"
+# Edge case: only [GOAL:] with no content should return empty
+check_goal "[GOAL:] grep something" ""
+# Known limitation: nested brackets in goal break at first ']'
+# Use alternatives like (ERROR) or ERROR/WARN instead of [ERROR]
+check_goal "[GOAL: find (ERROR) and (WARN) messages] grep -E '\[(ERROR|WARN)\]' logs/" "find (ERROR) and (WARN) messages"
+
+# ── S2: Session History ─────────────────────────────────────
+
+echo ""
+echo "=== Session History (S2) ==="
+
+# Use a temp session file for testing
+REAL_SESSION_FILE="$SESSION_FILE"
+SESSION_FILE="/tmp/test_session_$$.jsonl"
+rm -f "$SESSION_FILE"
+
+# Test: empty session
+PREV=$(get_prev_skeleton)
+if [[ -z "$PREV" ]]; then
+    pass "empty session: get_prev_skeleton returns empty"
+else
+    fail "empty session" "empty" "$PREV"
+fi
+
+HISTORY=$(get_session_history)
+if [[ "$HISTORY" == "[]" ]]; then
+    pass "empty session: get_session_history returns []"
+else
+    fail "empty session history" "[]" "$HISTORY"
+fi
+
+# Test: record and retrieve
+record_session "grep -r <literal> --include=<glob> <path>" "find TODO markers"
+PREV=$(get_prev_skeleton)
+if [[ "$PREV" == "grep -r <literal> --include=<glob> <path>" ]]; then
+    pass "record_session + get_prev_skeleton: correct skeleton"
+else
+    fail "record_session" "grep -r <literal> --include=<glob> <path>" "$PREV"
+fi
+
+# Test: multiple records, bounded to 5
+for i in $(seq 1 7); do
+    record_session "find <path> -name <glob> -exec grep <literal>" "search iteration $i"
+done
+COUNT=$(wc -l < "$SESSION_FILE" 2>/dev/null || echo 0)
+if [[ "$COUNT" -le 5 ]]; then
+    pass "session bounded: $COUNT entries (max 5)"
+else
+    fail "session bound check" "<=5" "$COUNT"
+fi
+
+# Test: prev skeleton is the most recent
+PREV=$(get_prev_skeleton)
+if [[ "$PREV" == "find <path> -name <glob> -exec grep <literal>" ]]; then
+    pass "get_prev_skeleton returns most recent after multiple inserts"
+else
+    fail "most recent skeleton" "find <path> -name <glob> -exec grep <literal>" "$PREV"
+fi
+
+# Cleanup
+rm -f "$SESSION_FILE"
+SESSION_FILE="$REAL_SESSION_FILE"
+
+# ── B1: Pair Cache ──────────────────────────────────────────
+
+echo ""
+echo "=== Pair Cache (B1) ==="
+
+REAL_PAIR_CACHE="$PAIR_CACHE_FILE"
+PAIR_CACHE_FILE="/tmp/test_pair_cache_$$.jsonl"
+rm -f "$PAIR_CACHE_FILE"
+
+PREV_SK="grep -r <literal> --include=<glob>"
+CURR_SK="find <path> -name <glob> | xargs grep <literal>"
+
+# Test: empty cache
+CACHED=$(lookup_pair_variant "$PREV_SK" "$CURR_SK" || true)
+if [[ -z "$CACHED" ]]; then
+    pass "empty pair cache: lookup returns nothing"
+else
+    fail "empty pair cache" "empty" "$CACHED"
+fi
+
+# Test: empty prev_skeleton
+CACHED=$(lookup_pair_variant "" "$CURR_SK" || true)
+if [[ -z "$CACHED" ]]; then
+    pass "pair cache: empty prev_skeleton skips lookup"
+else
+    fail "empty prev check" "empty" "$CACHED"
+fi
+
+# Test: record and lookup
+record_pair_variant "$PREV_SK" "$CURR_SK" "rg --glob '!.gitignore' TODO ."
+CACHED=$(lookup_pair_variant "$PREV_SK" "$CURR_SK" || true)
+if [[ -n "$CACHED" ]]; then
+    pass "pair cache: record + lookup returns cached command"
+else
+    fail "pair cache lookup" "non-empty" "$CACHED"
+fi
+
+# Test: pair feedback
+PREV_SK2="find <path> -type f | xargs wc -l"
+CURR_SK2="awk <literal>"
+record_pair_variant "$PREV_SK2" "$CURR_SK2" "fd -t f -x wc -l | awk '{sum+=\$1} END {print sum}'"
+record_pair_feedback "$PREV_SK2" "$CURR_SK2" "0"  # success
+CACHED=$(lookup_pair_variant "$PREV_SK2" "$CURR_SK2" || true)
+if [[ -n "$CACHED" ]]; then
+    pass "pair cache: entry survives after successful feedback"
+else
+    fail "pair feedback survival" "non-empty" "$CACHED"
+fi
+
+# Test: pair cache bounded (max 50)
+for i in $(seq 1 55); do
+    record_pair_variant "prev_sk_$i" "curr_sk_$i" "opt_cmd_$i"
+done
+COUNT=$(wc -l < "$PAIR_CACHE_FILE" 2>/dev/null || echo 0)
+if [[ "$COUNT" -le 50 ]]; then
+    pass "pair cache bounded: $COUNT entries (max 50)"
+else
+    fail "pair cache bound check" "<=50" "$COUNT"
+fi
+
+# Cleanup
+rm -f "$PAIR_CACHE_FILE"
+PAIR_CACHE_FILE="$REAL_PAIR_CACHE"
 
 # ── Summary ───────────────────────────────────────────────
 

@@ -50,12 +50,13 @@ is_copilot_latency_healthy() {
 }
 
 # Optimize a shell command using Copilot CLI.
-# Args: $1 = command, $2 = description (optional context)
+# Args: $1 = command, $2 = description (optional context), $3 = goal (optional, from [GOAL: ...])
 # Output: optimized command on stdout (or original if optimization fails)
 # Returns: 0 if optimized, 1 if passthrough (timeout/error/unavailable)
 optimize_command() {
     local cmd="$1"
     local desc="${2:-}"
+    local goal="${3:-}"
 
     # Guard: gh CLI must be available
     if ! command -v gh &>/dev/null; then
@@ -78,9 +79,17 @@ optimize_command() {
         return 1
     fi
 
-    # Build prompt
+    # Build prompt (I2/P1: goal-aware prompt construction)
     local prompt
-    if [[ -n "$desc" ]]; then
+    if [[ -n "$goal" ]]; then
+        # Truncate goal to 200 chars to prevent oversized prompts
+        local safe_goal="${goal:0:200}"
+        if [[ -n "$desc" ]]; then
+            prompt="Task goal: ${safe_goal}. Context: ${desc}. Optimize this shell command for the goal: ${cmd}. Output ONLY the optimized command, no explanation."
+        else
+            prompt="Task goal: ${safe_goal}. Optimize this shell command for the goal: ${cmd}. Output ONLY the optimized command, no explanation."
+        fi
+    elif [[ -n "$desc" ]]; then
         prompt="optimize this shell command: ${cmd}. context: ${desc}. output ONLY the optimized command, no explanation."
     else
         prompt="optimize this shell command: ${cmd}. output ONLY the optimized command, no explanation."

@@ -121,11 +121,14 @@ The bridge is not primarily an optimizer. **The bridge is a specialization enfor
     ├── pre-tool-use.sh          # Intercepts Bash calls before execution
     ├── post-tool-use.sh         # Captures results after execution
     ├── lib/
-    │   ├── common.sh            # Logging, classification, skeleton IR, bridge state
-    │   ├── copilot.sh           # Copilot CLI integration (optimize_command)
-    │   └── variants.sh          # Variant library (cache, feedback, cleanup)
+    │   ├── common.sh            # Logging, classification, skeleton IR, goal extraction, bridge state
+    │   ├── copilot.sh           # Copilot CLI integration (goal-aware optimize_command)
+    │   └── variants.sh          # Variant library (cache, feedback, session history, pair cache, cleanup)
     ├── variants.jsonl           # Runtime: cached command optimizations
     ├── feedback.jsonl           # Runtime: execution feedback history
+    ├── latency.jsonl            # Runtime: Copilot response time tracking (S4)
+    ├── session.jsonl            # Runtime: recent skeleton+goal triples (S2)
+    ├── pair_cache.jsonl         # Runtime: (prev, curr) pair optimizations (B1)
     ├── .bridge/                 # Runtime: pre→post hook state passing
     └── logs/
         └── copilot-hook.log     # Runtime: operational logs
@@ -323,12 +326,13 @@ export COPILOT_BRIDGE_MODE=passthrough
 
 ## Known Limitations
 
-- **Copilot CLI latency**: First query takes 6-12 seconds; variant cache hits reduce this to zero; S4 auto-disables if avg > 10s
+- **Copilot CLI latency**: First query takes 6-12 seconds; variant cache hits reduce this to zero; pair cache (v3.1) further improves hit rate for sequential commands; S4 auto-disables if avg > 10s
 - **Hook survival**: Hooks are loaded at session start; may not survive Claude Code session compaction
-- **Single-command optimization**: Currently optimizes one command at a time; pair/sequence caching (B axis) deferred to Turn 3
-- **No goal awareness**: Hook input does not expose the user's high-level goal — decisions are based purely on the command string; goal extraction (C axis) deferred to Turn 3
-- **Skeleton granularity**: Same skeleton may match commands with different intent (e.g., `grep -r 'foo' --include='*.ts'` and `grep -r 'bar' --include='*.py'` share a skeleton)
-- **Complexity threshold static**: Score threshold (≤2 skip) is fixed; auto-calibration needs scorer deployment data first (deferred to Turn 3)
+- **Claude awareness**: CLAUDE.md instruction (v3.0) tells Claude about the bridge, but Claude's behavior with [GOAL: ...] markers depends on how faithfully it follows CLAUDE.md instructions
+- **Goal parsing limitation**: Nested brackets `[GOAL: find [ERROR] messages]` break at first `]` — use parentheses or other alternatives in goal text
+- **Single-command optimization**: Pair cache (v3.1) addresses two-command sequences; longer sequences (Markov) are deferred to Turn 4
+- **Skeleton granularity**: Same skeleton may match commands with different intent; goal-aware caching (Turn 4) could improve this
+- **Complexity threshold static**: Score threshold (≤2 skip) is fixed; auto-calibration needs scorer deployment data first (deferred to Turn 4)
 
 ## Changelog
 
@@ -498,12 +502,91 @@ export COPILOT_BRIDGE_MODE=passthrough
        │  variants.jsonl  ←── cache + confidence        │
        │  feedback.jsonl  ←── execution history         │
        │  latency.jsonl   ←── Copilot response times    │
+       │  session.jsonl   ←── recent skeletons (S2)     │
+       │  pair_cache.jsonl←── pair-based cache (B1)     │
        │  .bridge/*.json  ←── pre→post communication    │
        │  logs/*.log      ←── operational logging       │
        └────────────────────────────────────────────────┘
 ```
 
+### v3.0 Intent Protocol
+
+```
+   Claude                                 Bridge                          Copilot
+   ──────                                 ──────                          ───────
+   
+   CLAUDE.md tells Claude
+   about [GOAL: ...] markers
+       │
+       ▼
+   Description: "[GOAL: find
+   all TODO markers] grep
+   -r 'TODO' --include='*.ts' ."
+       │
+       │  PreToolUse hook
+       └─────────┬─────────────────────────────────────────────┐
+                 │                                             │
+                 ▼                                             ▼
+          extract_goal()                              optimize_command()
+          "[GOAL: find all                            "Task goal: find all
+           TODO markers]"                              TODO markers.
+                                                       Optimize: grep -r..."
+                 │                                             │
+                 │                                             ▼
+                 │                                    Copilot CLI receives
+                 │                                    goal-aware prompt
+                 │                                             │
+                 │                                             ▼
+                 │                                    rg --glob '*.ts'
+                 │                                    'TODO' .
+                 │                                             │
+                 └─────────┬───────────────────────────────────┘
+                           │
+                           ▼
+                    Optimized command
+                    executes in Bash
+```
+
+**I1: CLAUDE.md Instruction** — Tells Claude about the bridge and how to use `[GOAL: ...]` markers in Bash command descriptions. Closes the coordination trap: Claude now knows a delegate exists.
+
+**I2: Goal Extraction** — `extract_goal()` parses `[GOAL: <text>]` from descriptions. Simple regex, zero overhead, backward-compatible.
+
+**P1: Enhanced Prompt Builder** — When a goal is present, Copilot CLI receives: `"Task goal: ${goal}. Optimize this shell command for the goal: ${cmd}."` — richer context, better optimizations.
+
+### v3.1 Session Awareness
+
+**S2: Session History** — `session.jsonl` tracks the last 5 (skeleton, goal, timestamp) triples for score≥3 commands. Bounded circular buffer. Enables pair cache.
+
+**B1: Pair Cache** — `pair_cache.jsonl` caches optimizations keyed on `(prev_skeleton, curr_skeleton)` pairs. Queried before single cache. Bounded to 50 entries. Same confidence lifecycle as single cache.
+
+**Pair cache query flow:**
+```
+   pair cache hit? ──► use cached pair optimization
+       │ miss
+       ▼
+   single cache hit? ──► use cached single optimization
+       │ miss
+       ▼
+   Copilot CLI → record both single + pair variants
+```
+
 ## Changelog
+
+### v3.0 — "The Intent Protocol" (2026-05-12)
+
+**I1: CLAUDE.md Instruction** — Bridge awareness + [GOAL: ...] usage in project CLAUDE.md. Tells Claude: focus on making intent clear, let the bridge handle tool selection and flags.
+
+**I2: [GOAL: ...] Parsing** — `extract_goal()` in common.sh extracts goal text from Bash command descriptions. Lightweight regex, backward-compatible (no marker = no change).
+
+**P1: Enhanced Prompt Builder** — `optimize_command()` accepts optional goal parameter. Goal-aware prompt: `"Task goal: ${goal}. Optimize this shell command for the goal: ${cmd}."` Truncated to 200 chars.
+
+**S2: Session History** — `session.jsonl` tracks last 5 skeletons with goals. Bounded circular buffer. Foundation for all temporal features.
+
+**B1: Pair Cache** — `pair_cache.jsonl` caches `(prev_skeleton, curr_skeleton)` → optimized command. 50-entry bound. Confidence lifecycle mirrors single cache.
+
+**Test Coverage** — 62 regression tests (62 pass, 0 fail): goal extraction (8), session history (6), pair cache (5), plus all v2.1 tests.
+
+**Design** — `第三轮设计判断.md` documents the full orthogonal→composition→murphy→lazyeval→spiral analysis chain.
 
 ### v2.1 — "Murphy's Armor" (2026-05-12)
 

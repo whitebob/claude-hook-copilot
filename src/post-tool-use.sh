@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # post-tool-use.sh -- PostToolUse hook for copilot-cli-hook
-# v2.1: Hard defenses (ERROR trap, safe_jq)
+# v3.0: Pair cache feedback + hard defenses (ERROR trap, safe_jq)
 # source: https://github.com/whitebob/claude-hook-copilot
 
 # H2: ERROR trap — never let hook exit non-zero
@@ -37,6 +37,12 @@ if [[ -n "$TOOL_CALL_ID" ]]; then
             RESULT_SUMMARY=$(safe_jq "$INPUT" '.result.stdout // ""' "" | head -c 200)
 
             record_feedback "$SKELETON" "$ORIGINAL_CMD" "$OPTIMIZED_CMD" "$EXIT_CODE" "$RESULT_SUMMARY"
+
+            # B1: Record pair feedback if this was a pair cache hit
+            PREV_SK=$(safe_jq "$BRIDGE" '.prev_skeleton // ""' "")
+            if [[ -n "$PREV_SK" ]]; then
+                record_pair_feedback "$PREV_SK" "$SKELETON" "$EXIT_CODE"
+            fi
 
             # Opportunistic cleanup (~1 in 20 calls)
             if [[ $((RANDOM % 20)) -eq 0 ]]; then
