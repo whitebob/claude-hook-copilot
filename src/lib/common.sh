@@ -7,6 +7,56 @@
 HOOK_DIR="${HOOK_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 LOG_FILE="${HOOK_DIR}/logs/copilot-hook.log"
 
+# ── Time Budget (H1: prevents hook timeout cascade) ─────
+
+HOOK_TIME_BUDGET="${HOOK_TIME_BUDGET:-10}"  # seconds before auto-passthrough
+HOOK_START_TIME="${HOOK_START_TIME:-$SECONDS}"
+
+# Check if we're within the time budget. Call before expensive operations.
+# Returns: 0 if OK to proceed, 1 if budget exceeded (caller should passthrough)
+check_time_budget() {
+    local elapsed=$((SECONDS - HOOK_START_TIME))
+    if [[ $elapsed -ge $HOOK_TIME_BUDGET ]]; then
+        log_message "WARN" "Time budget exceeded (${elapsed}s >= ${HOOK_TIME_BUDGET}s), forcing passthrough"
+        return 1
+    fi
+    return 0
+}
+
+# ── Atomic Write (H3: prevents file corruption) ──────────
+
+# Write JSON content atomically to a file (tmp + mv).
+# Args: $1 = filepath, $2 = content (JSON string)
+atomic_write_json() {
+    local filepath="$1"
+    local content="$2"
+    local tmp="${filepath}.tmp.$$"
+    echo "$content" > "$tmp" 2>/dev/null && mv "$tmp" "$filepath" 2>/dev/null || true
+}
+
+# Append JSON line atomically to a file.
+# Args: $1 = filepath, $2 = content (JSON string)
+atomic_append_json() {
+    local filepath="$1"
+    local content="$2"
+    echo "$content" >> "$filepath" 2>/dev/null || true
+}
+
+# Safe jq wrapper (H4: never crash on parse failure).
+# Args: $1 = json string, $2 = jq filter, $3 = default value (optional)
+safe_jq() {
+    local json="$1"
+    local filter="$2"
+    local default="${3:-}"
+    local result
+    result=$(echo "$json" | jq -r "$filter" 2>/dev/null) || true
+    if [[ -z "$result" || "$result" == "null" ]]; then
+        echo "$default"
+    else
+        echo "$result"
+    fi
+}
+
 log_message() {
     local level="$1"
     local message="$2"
@@ -155,12 +205,15 @@ write_bridge_state() {
     local optimized="$4"
 
     mkdir -p "$BRIDGE_DIR" 2>/dev/null || true
-    jq -nc \
+    local content
+    content=$(jq -nc \
         --arg sk "$skeleton" \
         --arg orig "$original" \
         --arg opt "$optimized" \
-        '{skeleton: $sk, original_command: $orig, optimized_command: $opt}' \
-        > "${BRIDGE_DIR}/${call_id}.json" 2>/dev/null || true
+        '{skeleton: $sk, original_command: $orig, optimized_command: $opt}' 2>/dev/null) || true
+    if [[ -n "$content" ]]; then
+        atomic_write_json "${BRIDGE_DIR}/${call_id}.json" "$content"
+    fi
 }
 
 # Read bridge state for a given tool_call_id.
@@ -169,7 +222,7 @@ read_bridge_state() {
     local call_id="$1"
     local path="${BRIDGE_DIR}/${call_id}.json"
     if [[ -f "$path" ]]; then
-        cat "$path"
-        rm -f "$path"  # Clean up after reading
+        cat "$path" 2>/dev/null
+        rm -f "$path" 2>/dev/null
     fi
 }

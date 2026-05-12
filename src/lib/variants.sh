@@ -28,11 +28,11 @@ lookup_variant() {
     fi
 
     local confidence
-    confidence=$(echo "$result" | jq -r '.confidence // 0')
+    confidence=$(safe_jq "$result" '.confidence // 0' "0")
 
     if (( $(echo "$confidence >= $CONFIDENCE_THRESHOLD" | bc -l 2>/dev/null || echo 0) )); then
         local optimized
-        optimized=$(echo "$result" | jq -r '.optimized_command')
+        optimized=$(safe_jq "$result" '.optimized_command' "")
         log_message "INFO" "Variant hit: skeleton=[${skeleton}] confidence=${confidence}"
         echo "$optimized"
         return 0
@@ -105,15 +105,15 @@ record_feedback() {
     local success_count
     local failure_count
     if [[ "$exit_code" == "0" ]]; then
-        success_count=$(echo "$current" | jq -r '.success_count // 0')
+        success_count=$(safe_jq "$current" '.success_count // 0' "0")
         success_count=$((success_count + 1))
-        new_confidence=$(echo "$current" | jq -r ".confidence + ${CONFIDENCE_BOOST}")
-        failure_count=$(echo "$current" | jq -r '.failure_count // 0')
+        new_confidence=$(safe_jq "$current" ".confidence + ${CONFIDENCE_BOOST}" "0")
+        failure_count=$(safe_jq "$current" '.failure_count // 0' "0")
     else
-        failure_count=$(echo "$current" | jq -r '.failure_count // 0')
+        failure_count=$(safe_jq "$current" '.failure_count // 0' "0")
         failure_count=$((failure_count + 1))
-        new_confidence=$(echo "$current" | jq -r ".confidence - ${CONFIDENCE_PENALTY}")
-        success_count=$(echo "$current" | jq -r '.success_count // 0')
+        new_confidence=$(safe_jq "$current" ".confidence - ${CONFIDENCE_PENALTY}" "0")
+        success_count=$(safe_jq "$current" '.success_count // 0' "0")
     fi
 
     # Clamp confidence to [0, 1]
@@ -133,7 +133,7 @@ record_feedback() {
         --arg now "$now" \
         --argjson sc "$success_count" \
         --argjson fc "$failure_count" \
-        '.confidence = $conf | .last_used = $now | .success_count = $sc | .failure_count = $fc')
+        '.confidence = $conf | .last_used = $now | .success_count = $sc | .failure_count = $fc' 2>/dev/null || echo "")
 
     # Replace the old entry
     sed -i "/\"skeleton\":\"${skeleton}\"/d" "$VARIANTS_FILE"
@@ -155,10 +155,10 @@ cleanup_variants() {
     local tmpfile="${VARIANTS_FILE}.tmp"
     while IFS= read -r line; do
         local conf last_used
-        conf=$(echo "$line" | jq -r '.confidence // 0')
-        last_used=$(echo "$line" | jq -r '.last_used // ""')
+        conf=$(safe_jq "$line" '.confidence // 0' "0")
+        last_used=$(safe_jq "$line" '.last_used // ""' "")
         if (( $(echo "$conf < 0.3" | bc -l 2>/dev/null || echo 0) )) && [[ "$last_used" < "$cutoff" ]]; then
-            log_message "INFO" "Variant cleanup: removing skeleton=[$(echo "$line" | jq -r '.skeleton')]"
+            log_message "INFO" "Variant cleanup: removing skeleton=[$(safe_jq "$line" '.skeleton' "unknown")]"
             continue
         fi
         echo "$line"
