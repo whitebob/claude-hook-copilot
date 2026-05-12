@@ -22,6 +22,10 @@ chmod +x "${TARGET_DIR}/pre-tool-use.sh"
 chmod +x "${TARGET_DIR}/post-tool-use.sh"
 echo "[OK] Copied hook scripts"
 
+# 2b. Deploy BRIDGE.md (non-invasive: lives alongside hook scripts, never touches CLAUDE.md)
+cp "${SOURCE_DIR}/lib/bridge-instructions.md" "${TARGET_DIR}/BRIDGE.md"
+echo "[OK] Deployed bridge instructions to ${TARGET_DIR}/BRIDGE.md"
+
 # 3. Generate settings.local.json with hooks configuration
 PRE_CMD="bash ${TARGET_DIR}/pre-tool-use.sh"
 POST_CMD="bash ${TARGET_DIR}/post-tool-use.sh"
@@ -52,4 +56,11 @@ echo "[OK] Generated ${SETTINGS_FILE}"
 
 echo "=== Install complete ==="
 echo "Hooks registered for Bash PreToolUse + PostToolUse"
+echo ""
+echo "Intent protocol instructions: ${TARGET_DIR}/BRIDGE.md"
+echo "  Claude reads this file to understand [GOAL: ...] markers."
+echo "  To make it always visible, optionally add to your CLAUDE.md:"
+echo "    # Include bridge instructions"
+echo "    source ~/.claude/copilot-cli-hook/BRIDGE.md"
+echo ""
 echo "To rollback: rm ${SETTINGS_FILE}"

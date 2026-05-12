@@ -124,6 +124,7 @@ The bridge is not primarily an optimizer. **The bridge is a specialization enfor
     │   ├── common.sh            # Logging, classification, skeleton IR, goal extraction, bridge state
     │   ├── copilot.sh           # Copilot CLI integration (goal-aware optimize_command)
     │   └── variants.sh          # Variant library (cache, feedback, session history, pair cache, cleanup)
+    ├── BRIDGE.md                # Intent protocol instructions (non-invasive, never touches CLAUDE.md)
     ├── variants.jsonl           # Runtime: cached command optimizations
     ├── feedback.jsonl           # Runtime: execution feedback history
     ├── latency.jsonl            # Runtime: Copilot response time tracking (S4)
@@ -328,7 +329,7 @@ export COPILOT_BRIDGE_MODE=passthrough
 
 - **Copilot CLI latency**: First query takes 6-12 seconds; variant cache hits reduce this to zero; pair cache (v3.1) further improves hit rate for sequential commands; S4 auto-disables if avg > 10s
 - **Hook survival**: Hooks are loaded at session start; may not survive Claude Code session compaction
-- **Claude awareness**: CLAUDE.md instruction (v3.0) tells Claude about the bridge, but Claude's behavior with [GOAL: ...] markers depends on how faithfully it follows CLAUDE.md instructions
+- **Claude awareness**: BRIDGE.md (v3.0) tells Claude about the bridge when deployed to `~/.claude/copilot-cli-hook/`. Claude's adoption of [GOAL: ...] markers depends on whether it reads this file. Users can optionally `source` it from their CLAUDE.md for stronger visibility
 - **Goal parsing limitation**: Nested brackets `[GOAL: find [ERROR] messages]` break at first `]` — use parentheses or other alternatives in goal text
 - **Single-command optimization**: Pair cache (v3.1) addresses two-command sequences; longer sequences (Markov) are deferred to Turn 4
 - **Skeleton granularity**: Same skeleton may match commands with different intent; goal-aware caching (Turn 4) could improve this
@@ -515,8 +516,9 @@ export COPILOT_BRIDGE_MODE=passthrough
    Claude                                 Bridge                          Copilot
    ──────                                 ──────                          ───────
    
-   CLAUDE.md tells Claude
-   about [GOAL: ...] markers
+   BRIDGE.md (in ~/.claude/
+   copilot-cli-hook/) tells
+   Claude about [GOAL: ...]
        │
        ▼
    Description: "[GOAL: find
@@ -547,7 +549,7 @@ export COPILOT_BRIDGE_MODE=passthrough
                     executes in Bash
 ```
 
-**I1: CLAUDE.md Instruction** — Tells Claude about the bridge and how to use `[GOAL: ...]` markers in Bash command descriptions. Closes the coordination trap: Claude now knows a delegate exists.
+**I1: BRIDGE.md Deployment** — A standalone `BRIDGE.md` file deployed to `~/.claude/copilot-cli-hook/BRIDGE.md`. Tells Claude about the bridge and `[GOAL: ...]` markers. Never touches the user's CLAUDE.md — install.sh deploys it alongside hook scripts, and it can be deleted independently (same symmetry as settings.local.json).
 
 **I2: Goal Extraction** — `extract_goal()` parses `[GOAL: <text>]` from descriptions. Simple regex, zero overhead, backward-compatible.
 
@@ -574,7 +576,7 @@ export COPILOT_BRIDGE_MODE=passthrough
 
 ### v3.0 — "The Intent Protocol" (2026-05-12)
 
-**I1: CLAUDE.md Instruction** — Bridge awareness + [GOAL: ...] usage in project CLAUDE.md. Tells Claude: focus on making intent clear, let the bridge handle tool selection and flags.
+**I1: BRIDGE.md Deployment** — Standalone `BRIDGE.md` deployed to `~/.claude/copilot-cli-hook/BRIDGE.md`. Never touches user's CLAUDE.md. Deleted on uninstall alongside settings.local.json.
 
 **I2: [GOAL: ...] Parsing** — `extract_goal()` in common.sh extracts goal text from Bash command descriptions. Lightweight regex, backward-compatible (no marker = no change).
 
