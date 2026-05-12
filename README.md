@@ -48,6 +48,70 @@ A bridge layer that connects Claude Code's top-down reasoning with Copilot CLI's
    Each side does what it does best.
 ```
 
+### The Coordination Problem
+
+Claude doesn't know the bridge exists. From its perspective, every Bash command it writes goes directly to execution — so it must invest cognitive budget in getting bash syntax, flags, tool selection, and pipeline construction exactly right. If it doesn't, the user blames Claude alone.
+
+```
+   What Claude Sees                   What the Bridge Sees
+   ┌────────────────────┐            ┌────────────────────────────┐
+   │ User: "find TODOs"  │            │ stdin: {tool_name, cmd,     │
+   │                     │            │   description, tool_call_id} │
+   │ Claude thinks:      │            │                            │
+   │ "I must write       │            │ variants.jsonl: history of  │
+   │  correct bash or    │            │ what worked before          │
+   │  the user will      │            │                            │
+   │  blame ME"          │            │ Copilot CLI: can optimize   │
+   │                     │            │ this command                │
+   │ Blind spot:         │            │                            │
+   │ Bridge exists ──────┼───────────►│ Blind spot:                │
+   │ Copilot available   │            │ Claude's full task context  │
+   └────────────────────┘            └────────────────────────────┘
+```
+
+This is a coordination trap: both systems want the user to succeed, but Claude can't delegate because it doesn't know the delegate exists.
+
+### What's Essential vs. What's Conventional
+
+Not all of Claude's command-writing effort is necessary. Decompose what a Bash command requires:
+
+| Layer | Requirement | Verdict |
+|-------|------------|---------|
+| Bash must receive parseable input | `grep` not `grepp` | **Essential** — Bash won't execute invalid syntax |
+| Claude must pick the right tool | `grep` vs `rg` vs `fd` | **Conventional** — Copilot knows tools better |
+| Claude must get flags exactly right | `--include` vs `--glob` | **Conventional** — Copilot handles this |
+| Claude must build optimal pipelines | 5 pipes vs 1 awk | **Conventional** — Copilot excels here |
+
+**Claude only needs to produce valid, executable bash — not optimal bash.** The gap between "valid" and "optimal" is where the bridge adds value. Claude's attention is wasted on the three conventional layers.
+
+### Specialization Enforcement
+
+Without the bridge, each system must compensate for the other's absence. Claude stretches into tool expertise; Copilot stretches into intent understanding. Both become mediocre at what the other does best.
+
+```
+   Without Bridge:                    With Bridge:
+   ─────────────────                  ─────────────
+   Claude ────────────────────        Claude ── intent ────┐
+     │  "I must know grep flags"        │  "I describe what"  │
+     │  "I must pick optimal tool"      │                     │
+     │  "I must build the pipeline"     │                     ▼
+     │                          ┌──────────────────────────────┐
+     │                          │           BRIDGE             │
+     │                          │    cache + route + feedback  │
+     │                          └──────────────────────────────┘
+     │                                         │
+   Copilot ───────────────────                 ▼
+     │  "I only see the command"    Copilot ── execution ────┐
+     │  "I have no task context"      │  "I execute exactly"   │
+     │                                │  "I learn from results" │
+```
+
+The bridge is not primarily an optimizer. **The bridge is a specialization enforcement mechanism.** It creates a protocol boundary that lets each system double down on its core competence:
+
+- **Claude** focuses on intent understanding, task decomposition, and architectural reasoning — freed from bash trivia
+- **Copilot** focuses on tool selection, flag optimization, and pipeline construction — with a feedback loop it never had before
+- **The bridge's deeper value**: It prevents the capability convergence that would make both systems compete for the same niche
+
 ## Architecture
 
 ```
