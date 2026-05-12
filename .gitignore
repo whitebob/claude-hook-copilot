@@ -1,0 +1,17 @@
+# Runtime data
+variants.jsonl
+feedback.jsonl
+*.jsonl
+
+# Logs
+logs/
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+*.swp
+*.swo
+*~
