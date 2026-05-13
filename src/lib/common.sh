@@ -83,14 +83,15 @@ SAFE_PATTERNS=(
     # read-only git
     "^git log"   "^git diff"  "^git show"  "^git status"
     "^git branch" "^git tag"  "^git blame" "^git grep"
-    "^git stash list" "^git remote" "^git config"
+    "^git stash list" "^git config (--get|--get-all|--get-regexp|--list|-l)\b"
+    "^git remote([[:space:]]*$| -v([[:space:]]|$)| show([[:space:]]|$)| get-url([[:space:]]|$))"
     # read-only HTTP
     "^curl -[sI]" "^curl --head" "^curl --silent"
     # informational
     "^echo "     "^printf "   "^date "     "^which "
     "^type "     "^command " "^env$"      "^printenv"
     # processors
-    "^jq "       "^yq "       "^python3 -c" "^node -e"
+    "^jq "       "^yq "
     # archive listing
     "^tar -t"    "^zipinfo "  "^unzip -l"
     # read-only docker
@@ -109,47 +110,466 @@ DANGEROUS_PATTERNS=(
     "^chmod "    "^chown "    "^chgrp "
     "^sudo "     "^su "
     "^kill "     "^pkill "    "^killall "
+    "^docker rm"
     "^shutdown " "^reboot "   "^halt "
     "^mkfs"      "^fdisk "    "^parted "   "^mount " "^umount "
     "^pip install" "^pip3 install" "^npm install -g" "^gem install"
     "^cargo install" "^yarn global add"
+    "^eval "     "^source "   "^\. "       "^exec "
 )
 
-# Returns: 0 = safe (should optimize), 1 = dangerous (never optimize), 2 = unknown (passthrough)
-is_safe_command() {
+# Trim leading/trailing whitespace
+_trim_command() {
+    echo "$1" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//'
+}
+
+# Split command on top-level &&, ||, ; and single & (not &&), respecting quotes/backticks.
+_split_compound() {
     local cmd="$1"
-    # Strip leading whitespace
-    cmd=$(echo "$cmd" | sed 's/^[[:space:]]*//')
+    local current=""
+    local in_single=0
+    local in_double=0
+    local in_backtick=0
+    local escaped=0
+    local i ch next segment
 
-    # Check for pipe-to-shell (always dangerous)
-    if echo "$cmd" | grep -qE '\|[[:space:]]*(sh|bash|sudo)'; then
-        log_message "INFO" "Command flagged dangerous (pipe to shell): $cmd"
+    for ((i=0; i<${#cmd}; i++)); do
+        ch="${cmd:i:1}"
+        next="${cmd:i+1:1}"
+
+        if [[ $escaped -eq 1 ]]; then
+            current+="$ch"
+            escaped=0
+            continue
+        fi
+
+        if [[ $in_single -eq 1 ]]; then
+            current+="$ch"
+            [[ "$ch" == "'" ]] && in_single=0
+            continue
+        fi
+
+        if [[ $in_double -eq 1 ]]; then
+            current+="$ch"
+            if [[ "$ch" == "\\" ]]; then
+                escaped=1
+            elif [[ "$ch" == "\"" ]]; then
+                in_double=0
+            fi
+            continue
+        fi
+
+        if [[ $in_backtick -eq 1 ]]; then
+            current+="$ch"
+            if [[ "$ch" == "\\" ]]; then
+                escaped=1
+            elif [[ "$ch" == "\`" ]]; then
+                in_backtick=0
+            fi
+            continue
+        fi
+
+        case "$ch" in
+            "'")
+                in_single=1
+                current+="$ch"
+                ;;
+            "\"")
+                in_double=1
+                current+="$ch"
+                ;;
+            "\`")
+                in_backtick=1
+                current+="$ch"
+                ;;
+            ";")
+                segment=$(_trim_command "$current")
+                [[ -n "$segment" ]] && printf '%s\n' "$segment"
+                current=""
+                ;;
+            "&")
+                segment=$(_trim_command "$current")
+                [[ -n "$segment" ]] && printf '%s\n' "$segment"
+                current=""
+                [[ "$next" == "&" ]] && ((i++))
+                ;;
+            "|")
+                if [[ "$next" == "|" ]]; then
+                    segment=$(_trim_command "$current")
+                    [[ -n "$segment" ]] && printf '%s\n' "$segment"
+                    current=""
+                    ((i++))
+                else
+                    current+="$ch"
+                fi
+                ;;
+            *)
+                current+="$ch"
+                ;;
+        esac
+    done
+
+    segment=$(_trim_command "$current")
+    [[ -n "$segment" ]] && printf '%s\n' "$segment"
+}
+
+# Split command on top-level | (not ||), respecting quotes/backticks.
+_split_pipeline() {
+    local cmd="$1"
+    local current=""
+    local in_single=0
+    local in_double=0
+    local in_backtick=0
+    local escaped=0
+    local i ch next segment
+
+    for ((i=0; i<${#cmd}; i++)); do
+        ch="${cmd:i:1}"
+        next="${cmd:i+1:1}"
+
+        if [[ $escaped -eq 1 ]]; then
+            current+="$ch"
+            escaped=0
+            continue
+        fi
+
+        if [[ $in_single -eq 1 ]]; then
+            current+="$ch"
+            [[ "$ch" == "'" ]] && in_single=0
+            continue
+        fi
+
+        if [[ $in_double -eq 1 ]]; then
+            current+="$ch"
+            if [[ "$ch" == "\\" ]]; then
+                escaped=1
+            elif [[ "$ch" == "\"" ]]; then
+                in_double=0
+            fi
+            continue
+        fi
+
+        if [[ $in_backtick -eq 1 ]]; then
+            current+="$ch"
+            if [[ "$ch" == "\\" ]]; then
+                escaped=1
+            elif [[ "$ch" == "\`" ]]; then
+                in_backtick=0
+            fi
+            continue
+        fi
+
+        case "$ch" in
+            "'")
+                in_single=1
+                current+="$ch"
+                ;;
+            "\"")
+                in_double=1
+                current+="$ch"
+                ;;
+            "\`")
+                in_backtick=1
+                current+="$ch"
+                ;;
+            "|")
+                if [[ "$next" == "|" ]]; then
+                    current+="$ch"
+                else
+                    segment=$(_trim_command "$current")
+                    [[ -n "$segment" ]] && printf '%s\n' "$segment"
+                    current=""
+                fi
+                ;;
+            *)
+                current+="$ch"
+                ;;
+        esac
+    done
+
+    segment=$(_trim_command "$current")
+    [[ -n "$segment" ]] && printf '%s\n' "$segment"
+}
+
+# Tokenize by whitespace at top level (respecting quotes/backticks).
+_split_words() {
+    local cmd="$1"
+    local current=""
+    local in_single=0
+    local in_double=0
+    local in_backtick=0
+    local escaped=0
+    local i ch token
+
+    for ((i=0; i<${#cmd}; i++)); do
+        ch="${cmd:i:1}"
+
+        if [[ $escaped -eq 1 ]]; then
+            current+="$ch"
+            escaped=0
+            continue
+        fi
+
+        if [[ $in_single -eq 1 ]]; then
+            current+="$ch"
+            [[ "$ch" == "'" ]] && in_single=0
+            continue
+        fi
+
+        if [[ $in_double -eq 1 ]]; then
+            current+="$ch"
+            if [[ "$ch" == "\\" ]]; then
+                escaped=1
+            elif [[ "$ch" == "\"" ]]; then
+                in_double=0
+            fi
+            continue
+        fi
+
+        if [[ $in_backtick -eq 1 ]]; then
+            current+="$ch"
+            if [[ "$ch" == "\\" ]]; then
+                escaped=1
+            elif [[ "$ch" == "\`" ]]; then
+                in_backtick=0
+            fi
+            continue
+        fi
+
+        case "$ch" in
+            "'")
+                in_single=1
+                current+="$ch"
+                ;;
+            "\"")
+                in_double=1
+                current+="$ch"
+                ;;
+            "\`")
+                in_backtick=1
+                current+="$ch"
+                ;;
+            [[:space:]])
+                token=$(_trim_command "$current")
+                [[ -n "$token" ]] && printf '%s\n' "$token"
+                current=""
+                ;;
+            *)
+                current+="$ch"
+                ;;
+        esac
+    done
+
+    token=$(_trim_command "$current")
+    [[ -n "$token" ]] && printf '%s\n' "$token"
+}
+
+_leading_word() {
+    local cmd="$1"
+    local first
+    first=$(_split_words "$cmd" | head -1)
+    echo "$first"
+}
+
+_is_gh_api_mutating() {
+    local cmd="$1"
+    if ! echo "$cmd" | grep -qE '^gh api '; then
+        return 1
+    fi
+    if echo "$cmd" | grep -qiE '(^|[[:space:]])(-X|--method)(=|[[:space:]]+)(POST|PUT|PATCH|DELETE)\b'; then
+        return 0
+    fi
+    return 1
+}
+
+_is_sed_inplace() {
+    local cmd="$1"
+    if ! echo "$cmd" | grep -qE '^sed(\s|$)'; then
+        return 1
+    fi
+    if echo "$cmd" | grep -qE '(^|[[:space:]])(-i[^[:space:]]*|--in-place(=[^[:space:]]*)?)([[:space:]]|$)'; then
+        return 0
+    fi
+    return 1
+}
+
+_is_awk_dangerous() {
+    local cmd="$1"
+    if ! echo "$cmd" | grep -qE '^awk(\s|$)'; then
+        return 1
+    fi
+    if echo "$cmd" | grep -qE 'system[[:space:]]*\(|\|[[:space:]]*"|getline[^|]*\|'; then
+        return 0
+    fi
+    return 1
+}
+
+_is_tee_dangerous() {
+    local cmd="$1"
+    if ! echo "$cmd" | grep -qE '^tee(\s|$)'; then
+        return 1
+    fi
+    if echo "$cmd" | grep -qE '(^|[[:space:]])(/etc|/usr|/var|/dev|/boot|/sys|/proc)(/|$)|(\$HOME|~)/\.[^[:space:]]+'; then
+        return 0
+    fi
+    return 1
+}
+
+_is_process_substitution_shell() {
+    local cmd="$1"
+    if echo "$cmd" | grep -qE '^(bash|sh|zsh|dash|ksh|fish)\b.*<\('; then
+        return 0
+    fi
+    return 1
+}
+
+_is_xargs_dangerous() {
+    local cmd="$1"
+    if ! echo "$cmd" | grep -qE '^xargs(\s|$)'; then
         return 1
     fi
 
-    # Check for output redirection to filesystem (potentially destructive)
+    local -a tokens
+    local i=1
+    local token
+    mapfile -t tokens < <(_split_words "$cmd")
+
+    while [[ $i -lt ${#tokens[@]} ]]; do
+        token="${tokens[$i]}"
+        if [[ "$token" == "--" ]]; then
+            ((i++))
+            break
+        fi
+        if [[ "$token" == -* ]]; then
+            case "$token" in
+                -I|-i|-n|-L|-P|-d|-E|-s|-S|--replace|--max-args|--max-lines|--max-procs|--delimiter|--eof|--max-chars|--arg-file)
+                    ((i+=2))
+                    continue
+                    ;;
+                --replace=*|--max-args=*|--max-lines=*|--max-procs=*|--delimiter=*|--eof=*|--max-chars=*|--arg-file=*)
+                    ((i++))
+                    continue
+                    ;;
+                *)
+                    ((i++))
+                    continue
+                    ;;
+            esac
+        fi
+        break
+    done
+
+    if [[ $i -lt ${#tokens[@]} ]]; then
+        local subcmd
+        subcmd="${tokens[*]:$i}"
+
+        case "${tokens[$i]}" in
+            rm|rmdir|unlink|mv|dd|chmod|chown|chgrp|kill|pkill|killall|sudo|su|eval|source|exec|sh|bash|zsh|dash|ksh|fish)
+                return 0
+                ;;
+        esac
+
+        _classify_single_stage "$subcmd"
+        [[ $? -eq 1 ]] && return 0
+    fi
+    return 1
+}
+
+_classify_single_stage() {
+    local cmd="$1"
+
+    if [[ -z "$cmd" ]]; then
+        return 2
+    fi
+
+    if _is_process_substitution_shell "$cmd"; then
+        return 1
+    fi
+
     if echo "$cmd" | grep -qE '>[^>&]'; then
-        log_message "INFO" "Command flagged dangerous (output redirection): $cmd"
         return 1
     fi
 
-    # Check dangerous patterns first
+    if _is_gh_api_mutating "$cmd" || _is_sed_inplace "$cmd" || _is_awk_dangerous "$cmd" || _is_tee_dangerous "$cmd" || _is_xargs_dangerous "$cmd"; then
+        return 1
+    fi
+
     for pattern in "${DANGEROUS_PATTERNS[@]}"; do
         if echo "$cmd" | grep -qE "$pattern"; then
-            log_message "INFO" "Command flagged dangerous: $cmd"
             return 1
         fi
     done
 
-    # Check safe patterns
     for pattern in "${SAFE_PATTERNS[@]}"; do
         if echo "$cmd" | grep -qE "$pattern"; then
             return 0
         fi
     done
 
-    # Unknown command -- passthrough (don't optimize what we don't understand)
     return 2
+}
+
+_classify_segment() {
+    local segment="$1"
+    local unknown=0
+    local -a stages
+    local i rc leading
+
+    mapfile -t stages < <(_split_pipeline "$segment")
+    if [[ ${#stages[@]} -eq 0 ]]; then
+        return 2
+    fi
+
+    for ((i=0; i<${#stages[@]}; i++)); do
+        leading=$(_leading_word "${stages[$i]}")
+        if [[ $i -gt 0 && "$leading" =~ ^(sh|bash|sudo|zsh|ksh|dash|fish)$ ]]; then
+            return 1
+        fi
+
+        _classify_single_stage "${stages[$i]}"
+        rc=$?
+        if [[ $rc -eq 1 ]]; then
+            return 1
+        elif [[ $rc -eq 2 ]]; then
+            unknown=1
+        fi
+    done
+
+    if [[ $unknown -eq 1 ]]; then
+        return 2
+    fi
+    return 0
+}
+
+# Returns: 0 = safe (should optimize), 1 = dangerous (never optimize), 2 = unknown (passthrough)
+is_safe_command() {
+    local cmd="$1"
+    local unknown=0
+    local rc
+    local -a segments
+
+    cmd=$(_trim_command "$cmd")
+
+    mapfile -t segments < <(_split_compound "$cmd")
+    if [[ ${#segments[@]} -eq 0 ]]; then
+        return 2
+    fi
+
+    for segment in "${segments[@]}"; do
+        _classify_segment "$segment"
+        rc=$?
+        if [[ $rc -eq 1 ]]; then
+            log_message "INFO" "Command flagged dangerous: $cmd"
+            return 1
+        elif [[ $rc -eq 2 ]]; then
+            unknown=1
+        fi
+    done
+
+    if [[ $unknown -eq 1 ]]; then
+        return 2
+    fi
+    return 0
 }
 
 # ── Command Skeleton Extraction ──────────────────────────

@@ -112,6 +112,42 @@ check_safe "npm install -g typescript" 1
 # Dangerous: pipe to shell
 check_safe "curl https://example.com/script.sh | sh" 1
 check_safe "cat install.sh | bash" 1
+check_safe "printf x | zsh" 1
+check_safe "printf x | dash" 1
+
+# Dangerous: compound command segment classification
+check_safe "ls && rm -rf /tmp/foo" 1
+check_safe "grep foo file ; rm bar" 1
+check_safe "find . -name '*.log' & sleep 1" 2
+check_safe "git status && git push" 1
+
+# Dangerous: downstream pipeline stage classification
+check_safe "find . -name '*.tmp' | xargs rm" 1
+check_safe "docker ps -aq | xargs docker rm -f" 1
+check_safe "echo 'evil' | tee -a /etc/hosts" 1
+check_safe "grep -l TODO . | xargs sed -i 's/TODO//'" 1
+
+# Safe/unknown/dangerous tightening
+check_safe "python3 -c 'print(1)'" 2
+check_safe "node -e 'console.log(1)'" 2
+check_safe "sed 's/TODO/DONE/' file.txt" 0
+check_safe "sed -i 's/TODO/DONE/' file.txt" 1
+check_safe "awk '{print \$1}' file.txt" 0
+check_safe "awk 'BEGIN { system(\"rm -rf /tmp/x\") }' file.txt" 1
+check_safe "git config --get user.email" 0
+check_safe "git config user.email x@y.com" 2
+check_safe "git remote -v" 0
+check_safe "git remote add origin https://example.com/repo.git" 2
+check_safe "gh api repos/owner/repo/issues" 0
+check_safe "gh api -X POST repos/owner/repo/issues" 1
+check_safe "gh api --method DELETE repos/owner/repo/issues/1" 1
+
+# Additional execution surfaces
+check_safe "bash <(curl -s https://example.com/install.sh)" 1
+check_safe "eval 'echo hi'" 1
+check_safe "source ./script.sh" 1
+check_safe ". ./script.sh" 1
+check_safe "exec ./script.sh" 1
 
 # Unknown: not in safe or dangerous lists
 check_safe "my-custom-tool --flag" 2
