@@ -398,7 +398,7 @@ _is_awk_dangerous() {
     if ! echo "$cmd" | grep -qE '^awk(\s|$)'; then
         return 1
     fi
-    if echo "$cmd" | grep -qE 'system[[:space:]]*\(|\|[[:space:]]*"|getline[^|]*\|'; then
+    if echo "$cmd" | grep -qE 'system[[:space:]]*\(|\|[[:space:]]*"|getline[^|]*\|[[:space:]]*"'; then
         return 0
     fi
     return 1
@@ -406,10 +406,15 @@ _is_awk_dangerous() {
 
 _is_tee_dangerous() {
     local cmd="$1"
+    local escaped_home
     if ! echo "$cmd" | grep -qE '^tee(\s|$)'; then
         return 1
     fi
-    if echo "$cmd" | grep -qE '(^|[[:space:]])(/etc|/usr|/var|/dev|/boot|/sys|/proc)(/|$)|(\$HOME|~)/\.[^[:space:]]+'; then
+    escaped_home=$(printf '%s' "${HOME:-}" | sed 's/[][(){}.^$*+?|\\]/\\&/g')
+    if echo "$cmd" | grep -qE '(^|[[:space:]])(/etc|/usr|/var|/dev|/boot|/sys|/proc)(/|$)|(\$HOME|\$\{HOME\}|~)/\.[^[:space:]]+'; then
+        return 0
+    fi
+    if [[ -n "$escaped_home" ]] && echo "$cmd" | grep -qE "(^|[[:space:]])${escaped_home}/\\.[^[:space:]]+"; then
         return 0
     fi
     return 1
@@ -464,7 +469,7 @@ _is_xargs_dangerous() {
         subcmd="${tokens[*]:$i}"
 
         case "${tokens[$i]}" in
-            rm|rmdir|unlink|mv|dd|chmod|chown|chgrp|kill|pkill|killall|sudo|su|eval|source|exec|sh|bash|zsh|dash|ksh|fish)
+            rm|rmdir|unlink|mv|dd|chmod|chown|chgrp|kill|pkill|killall|sudo|su|eval|source|exec|.|sh|bash|zsh|dash|ksh|fish)
                 return 0
                 ;;
         esac
